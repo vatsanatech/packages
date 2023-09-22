@@ -8,7 +8,9 @@ import static com.google.android.exoplayer2.Player.REPEAT_MODE_ALL;
 import static com.google.android.exoplayer2.Player.REPEAT_MODE_OFF;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.net.Uri;
+import android.os.Build;
 import android.view.Surface;
 import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
@@ -28,10 +30,19 @@ import com.google.android.exoplayer2.source.dash.DefaultDashChunkSource;
 import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.source.smoothstreaming.DefaultSsChunkSource;
 import com.google.android.exoplayer2.source.smoothstreaming.SsMediaSource;
+import com.google.android.exoplayer2.ui.StyledPlayerView;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.google.android.exoplayer2.util.Util;
+import com.mux.stats.sdk.core.model.CustomData;
+import com.mux.stats.sdk.core.model.CustomerData;
+import com.mux.stats.sdk.core.model.CustomerVideoData;
+import com.mux.stats.sdk.core.model.CustomerViewData;
+import com.mux.stats.sdk.core.model.CustomerViewerData;
+import com.mux.stats.sdk.muxstats.MuxStatsExoPlayer;
+import android.content.res.Configuration;
+
 import io.flutter.plugin.common.EventChannel;
 import io.flutter.view.TextureRegistry;
 import java.util.Arrays;
@@ -39,6 +50,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 final class VideoPlayer {
   private static final String FORMAT_SS = "ss";
@@ -63,6 +75,10 @@ final class VideoPlayer {
   private final VideoPlayerOptions options;
 
   private DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
+
+  private MuxStatsExoPlayer muxStatsExoPlayer = null;
+
+  private CustomerData customerData = new CustomerData();
 
   VideoPlayer(
       Context context,
@@ -89,6 +105,10 @@ final class VideoPlayer {
     exoPlayer.prepare();
 
     setUpVideoPlayer(exoPlayer, new QueuingEventSink());
+
+    if(Objects.equals(httpHeaders.get("enableMuxAnalytics"), "true")) {
+      initializeMUXDataAnalytics(context, uri.toString(),httpHeaders);
+    }
   }
 
   // Constructor used to directly test members of this class.
@@ -167,6 +187,62 @@ final class VideoPlayer {
           throw new IllegalStateException("Unsupported type: " + type);
         }
     }
+  }
+
+  //initializing MUX Data Analytics for ExoPlayer
+  private void initializeMUXDataAnalytics(Context context, String videoURL, Map<String,String> data) {
+
+    Resources resources = context.getResources(); // Using context to get resources
+    boolean isTablet = isTablet(resources); //checking the device type
+
+    CustomerData customerData = new CustomerData();
+    customerData.setCustomerVideoData(new CustomerVideoData());
+
+    //add the title of the video
+    customerData.getCustomerVideoData().setVideoTitle(
+            data.get("videoTitle") == null ? "STAGE-ANDROID" : data.get("videoTitle")
+    );
+    customerData.getCustomerVideoData().setVideoSourceUrl(videoURL);
+
+    customerData.setCustomerViewData(new CustomerViewData());
+
+    customerData.getCustomerViewData().setViewSessionId( data.get("sessionID") == null ? "STAGE-ANDROID" : data.get("sessionID"));
+//    other parameters can also be set to customer view data in the similar way
+//    customerData.getCustomerViewData().set
+
+    customerData.setCustomerViewerData(new CustomerViewerData());
+    customerData.getCustomerViewerData().setMuxViewerDeviceCategory(isTablet ? "Android Tablet" : "Android Mobile");
+    customerData.getCustomerViewerData().setMuxViewerDeviceManufacturer(Build.MANUFACTURER);
+    customerData.getCustomerViewerData().setMuxViewerOsVersion(Build.VERSION.RELEASE);
+
+    //CUSTOM tracking parameters can be sent by attaching to customData (MAX-5)
+    customerData.setCustomData(new CustomData());
+    if(data.get("customData1")!=null)
+      customerData.getCustomData().setCustomData1(data.get("customData1"));
+    if(data.get("customData2")!=null)
+      customerData.getCustomData().setCustomData2(data.get("customData2"));
+    if(data.get("customData3")!=null)
+      customerData.getCustomData().setCustomData3(data.get("customData3"));
+    if(data.get("customData4")!=null)
+      customerData.getCustomData().setCustomData4(data.get("customData4"));
+    if(data.get("customData5")!=null)
+      customerData.getCustomData().setCustomData5(data.get("customData5"));
+
+
+    //we need a separate player view to be associated with the exo player
+    StyledPlayerView playerView = new StyledPlayerView(context);
+    //playerView.setPlayer(exoPlayer);
+
+    muxStatsExoPlayer = new MuxStatsExoPlayer(context, Objects.requireNonNull(data.get("muxEnvKey")), exoPlayer, customerData);
+
+    //associating the mux stats player to monitor the video player and send analytics
+    // Make sure to monitor the player before calling `prepare` on the ExoPlayer instance
+    muxStatsExoPlayer.setPlayerView(playerView);
+  }
+
+  private boolean isTablet(Resources resources) {
+    int screenLayout = resources.getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK;
+    return screenLayout == Configuration.SCREENLAYOUT_SIZE_LARGE || screenLayout == Configuration.SCREENLAYOUT_SIZE_XLARGE;
   }
 
   private void setUpVideoPlayer(ExoPlayer exoPlayer, QueuingEventSink eventSink) {
